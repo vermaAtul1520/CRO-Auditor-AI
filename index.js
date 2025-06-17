@@ -87,6 +87,7 @@ app.post('/api/generate-ppt', async (req, res) => {
     const pptPath = await generatePPT(auditData, { useGamma: true });
     console.log("Ppt gebrated=====;;",pptPath)
     
+    
     res.json({
       success: true,
       downloadUrl: `https://cro-auditor-ai.vercel.app/${path.basename(pptPath?.filename)}`
