@@ -89,7 +89,7 @@ app.post('/api/generate-ppt', async (req, res) => {
     
     res.json({
       success: true,
-    //   downloadUrl: `/reports/${path.basename(pptPath)}`
+      downloadUrl: `https://cro-auditor-ai.vercel.app/${path.basename(pptPath?.filename)}`
     });
 
   } catch (error) {
