@@ -1,28 +1,83 @@
-const puppeteer = require('puppeteer');
+const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer-core');
 const path = require('path');
 const fs = require('fs');
 
 async function scrapeWebsite(url) {
   console.log(`Scraping website: ${url}`);
   
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-  
-  const page = await browser.newPage();
+  let browser;
   
   try {
+    // Detect environment - Vercel vs local
+    const isLocal = process.env.NODE_ENV === 'development' || !process.env.VERCEL;
+    
+    if (isLocal) {
+      // Local development - use regular puppeteer
+      try {
+        const puppeteerFull = require('puppeteer');
+        browser = await puppeteerFull.launch({
+          headless: 'new',
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+      } catch (error) {
+        console.log('Puppeteer not found, using puppeteer-core with local chromium');
+        browser = await puppeteer.launch({
+          headless: 'new',
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+      }
+    } else {
+      // Production/Vercel - use optimized chromium
+      console.log('Using @sparticuz/chromium for production');
+      
+      // Optimized chrome args for Vercel serverless
+      const chromeArgs = [
+        ...chromium.args,
+        '--disable-dev-shm-usage',
+        '--disable-background-timer-throttling',
+        '--disable-background-networking',
+        '--disable-background-sync',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--disable-images', // Speed up by not loading images
+        '--disable-javascript', // We don't need JS execution for basic scraping
+        '--font-render-hinting=none'
+      ];
+
+      browser = await puppeteer.launch({
+        args: chromeArgs,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
+        ignoreHTTPSErrors: true,
+      });
+    }
+    
+    const page = await browser.newPage();
+    
     // Set viewport for consistent screenshots
     await page.setViewport({ width: 1200, height: 800 });
+    
+    // Set request interception to speed up loading
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      // Block unnecessary resources to speed up loading
+      if (resourceType === 'image' || resourceType === 'media' || resourceType === 'font') {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
     
     // Start timing
     const startTime = Date.now();
     
-    // Navigate to the page
+    // Navigate to the page with shorter timeout for Vercel
     await page.goto(url, { 
-      waitUntil: 'networkidle2',
-      timeout: 30000 
+      waitUntil: 'domcontentloaded', // Faster than networkidle2
+      timeout: 15000 // Reduced timeout for Vercel limits
     });
     
     const loadTime = Date.now() - startTime;
@@ -97,16 +152,13 @@ async function scrapeWebsite(url) {
       };
     });
     
-    // Take screenshots
+    // Take screenshots with optimization for Vercel
     const screenshots = await takeScreenshots(page, url);
     
     // Check mobile responsiveness
     await page.setViewport({ width: 375, height: 667 }); // iPhone SE size
     const mobileScreenshot = await takeScreenshot(page, 'mobile-view', sanitizeFilename(new URL(url).hostname));
     screenshots.push(mobileScreenshot);
-    
-    // Reset viewport
-    await page.setViewport({ width: 1200, height: 800 });
     
     const scrapedData = {
       ...pageData,
@@ -122,7 +174,9 @@ async function scrapeWebsite(url) {
     console.error('Scraping error:', error);
     throw new Error(`Failed to scrape website: ${error.message}`);
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
@@ -130,48 +184,69 @@ async function takeScreenshots(page, url) {
   const screenshots = [];
   const domain = sanitizeFilename(new URL(url).hostname);
   
-  // Full page screenshot
-  const fullPageScreenshot = await takeScreenshot(page, 'full-page', domain);
-  screenshots.push(fullPageScreenshot);
-  
-  // Hero section screenshot (top 600px)
-  const heroFilename = `${domain}-hero-${Date.now()}.png`;
-  const heroPath = path.join(__dirname, 'screenshots', heroFilename);
-  
-  await page.screenshot({
-    path: heroPath,
-    clip: { x: 0, y: 0, width: 1200, height: 600 }
-  });
-  
-  screenshots.push({
-    type: 'hero',
-    filename: heroFilename,
-    description: 'Hero section and above-the-fold content'
-  });
+  try {
+    // Full page screenshot as base64 with compression
+    const fullPageBuffer = await page.screenshot({
+      fullPage: true,
+      type: 'jpeg', // Use JPEG for smaller file size
+      quality: 70,   // Reduce quality for smaller size
+      encoding: 'binary'
+    });
+    
+    screenshots.push({
+      type: 'full-page',
+      data: fullPageBuffer.toString('base64'),
+      description: 'Full page screenshot'
+    });
+    
+    // Hero section screenshot (top 600px) as base64
+    const heroBuffer = await page.screenshot({
+      clip: { x: 0, y: 0, width: 1200, height: 600 },
+      type: 'jpeg',
+      quality: 70,
+      encoding: 'binary'
+    });
+    
+    screenshots.push({
+      type: 'hero',
+      data: heroBuffer.toString('base64'),
+      description: 'Hero section and above-the-fold content'
+    });
+    
+  } catch (error) {
+    console.error('Screenshot error:', error);
+    // Return empty array if screenshots fail
+    screenshots.push({
+      type: 'error',
+      data: null,
+      description: 'Screenshot failed: ' + error.message
+    });
+  }
   
   return screenshots;
 }
 
 async function takeScreenshot(page, type, domain) {
-  const filename = `${domain}-${type}-${Date.now()}.png`;
-  const filepath = path.join(__dirname, 'screenshots', filename);
-  
-  if (type === 'full-page') {
-    await page.screenshot({
-      path: filepath,
-      fullPage: true
+  try {
+    const buffer = await page.screenshot({
+      type: 'jpeg',
+      quality: 70,
+      encoding: 'binary'
     });
-  } else {
-    await page.screenshot({
-      path: filepath
-    });
+    
+    return {
+      type,
+      data: buffer.toString('base64'),
+      description: `${type} screenshot`
+    };
+  } catch (error) {
+    console.error(`${type} screenshot error:`, error);
+    return {
+      type,
+      data: null,
+      description: `${type} screenshot failed: ${error.message}`
+    };
   }
-  
-  return {
-    type,
-    filename,
-    description: `${type} screenshot`
-  };
 }
 
 // Helper function to sanitize filenames for cross-platform compatibility

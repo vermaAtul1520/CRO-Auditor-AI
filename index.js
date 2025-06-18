@@ -4,8 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { scrapeWebsite } = require('./scraper');
 const { generateAudit } = require('./generateAudit');
-// Fix: Import the correct function name from your AI-enhanced generator
-const { generatePPT } = require('./ai-enhanced-ppt'); // Use the file we created earlier
+const { generatePPT } = require('./generatePPT');
 require('dotenv').config();
 
 const app = express();
@@ -16,14 +15,32 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Serve static files (this works on Vercel with some limitations)
-app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
-app.use('/reports', express.static(path.join(__dirname, 'reports')));
+// Use /tmp directory for Vercel compatibility
+const getScreenshotsDir = () => {
+  const isVercel = process.env.NODE_ENV === 'production' && process.env.VERCEL;
+  return isVercel ? path.join('/tmp', 'screenshots') : path.join(__dirname, 'screenshots');
+};
 
-// Create directories if they don't exist (only in development)
-if (process.env.NODE_ENV !== 'production') {
-  const screenshotsDir = path.join(__dirname, 'screenshots');
-  const reportsDir = path.join(__dirname, 'reports');
+const getReportsDir = () => {
+  const isVercel = process.env.NODE_ENV === 'production' && process.env.VERCEL;
+  return isVercel ? path.join('/tmp', 'reports') : path.join(__dirname, 'reports');
+};
+
+// Serve static files with proper paths
+app.use('/screenshots', (req, res, next) => {
+  const screenshotsDir = getScreenshotsDir();
+  express.static(screenshotsDir)(req, res, next);
+});
+
+app.use('/reports', (req, res, next) => {
+  const reportsDir = getReportsDir();
+  express.static(reportsDir)(req, res, next);
+});
+
+// Create directories if they don't exist
+function ensureDirectories() {
+  const screenshotsDir = getScreenshotsDir();
+  const reportsDir = getReportsDir();
 
   if (!fs.existsSync(screenshotsDir)) {
     fs.mkdirSync(screenshotsDir, { recursive: true });
@@ -33,6 +50,9 @@ if (process.env.NODE_ENV !== 'production') {
     fs.mkdirSync(reportsDir, { recursive: true });
   }
 }
+
+// Initialize directories
+ensureDirectories();
 
 // In-memory storage for audit data
 const auditStorage = new Map();
@@ -105,8 +125,8 @@ app.post('/api/generate-ppt', async (req, res) => {
       throw new Error('Failed to generate PPT file');
     }
     
-    // Fix: Construct proper download URL
-    const downloadUrl = `/reports/${pptResult.filename}`;
+    // Construct proper download URL
+    const downloadUrl = `${process.env.BASE_URL}/reports/${pptResult.filename}`;
     
     res.json({
       success: true,
@@ -129,7 +149,8 @@ app.post('/api/generate-ppt', async (req, res) => {
 app.get('/api/download/:filename', (req, res) => {
   try {
     const { filename } = req.params;
-    const filepath = path.join(__dirname, 'reports', filename);
+    const reportsDir = getReportsDir();
+    const filepath = path.join(reportsDir, filename);
     
     if (!fs.existsSync(filepath)) {
       return res.status(404).json({ error: 'File not found' });
@@ -151,7 +172,7 @@ app.get('/api/download/:filename', (req, res) => {
 // Add route to list generated reports
 app.get('/api/reports', (req, res) => {
   try {
-    const reportsDir = path.join(__dirname, 'reports');
+    const reportsDir = getReportsDir();
     
     if (!fs.existsSync(reportsDir)) {
       return res.json({ reports: [] });
@@ -174,14 +195,18 @@ app.get('/api/reports', (req, res) => {
   }
 });
 
-// Health check
+// Health check with environment info
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    hasOpenAI: !!process.env.OPENAI_API_KEY,
-    hasAnthropic: !!process.env.ANTHROPIC_API_KEY
+    isVercel: !!process.env.VERCEL,
+    hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+    hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    nodeVersion: process.version,
+    screenshotsDir: getScreenshotsDir(),
+    reportsDir: getReportsDir()
   });
 });
 
@@ -214,9 +239,15 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`OpenAI API Key: ${process.env.OPENAI_API_KEY ? 'Set' : 'Not set'}`);
-  console.log(`Anthropic API Key: ${process.env.ANTHROPIC_API_KEY ? 'Set' : 'Not set'}`);
-});
+// Only listen on port if not in Vercel environment
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`OpenAI API Key: ${process.env.OPENAI_API_KEY ? 'Set' : 'Not set'}`);
+    console.log(`Anthropic API Key: ${process.env.ANTHROPIC_API_KEY ? 'Set' : 'Not set'}`);
+  });
+}
+
+// Export for Vercel
+module.exports = app;

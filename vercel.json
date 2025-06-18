@@ -1,39 +1,28 @@
 {
-    "version": 2,
-    "builds": [
-        {
-            "src": "./index.js",
-            "use": "@vercel/node",
-            "config": {
-                "maxLambdaSize": "50mb"
-            }
-        }
-    ],
-    
-    "routes": [
-        {
-            "src": "/api/(.*)",
-            "dest": "/index.js"
-        },
-        {
-            "src": "/reports/(.*)",
-            "dest": "/index.js"
-        },
-        {
-            "src": "/screenshots/(.*)",
-            "dest": "/index.js"
-        },
-        {
-            "src": "/(.*)",
-            "dest": "/index.js"
-        }
-    ],
-    "functions": {
-        "index.js": {
-            "maxDuration": 300
-        }
-    },
-    "env": {
-        "NODE_ENV": "production"
+  "version": 2,
+  "builds": [
+    {
+      "src": "./index.js",
+      "use": "@vercel/node",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
     }
+  ],
+  "functions": {
+    "index.js": {
+      "maxDuration": 300,
+      "memory": 1024
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/index.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.js"
+    }
+  ]
 }
